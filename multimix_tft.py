@@ -1,263 +1,440 @@
-from typing import Dict, List, Tuple, Union
-
+import pytorch_lightning as pl
+from tft.base_components import GatedLinearUnit
+from tft.base_components import GateAddNormNetwork
+from tft.base_components import GatedResidualNetwork
+from tft.base_components import ScaledDotProductAttention
+from tft.base_components import InterpretableMultiHeadAttention
+from tft.base_components import VariableSelectionNetwork
+import json
 import torch
-from torch.nn.utils import rnn
 from torch import nn
-
-from pytorch_forecasting import TemporalFusionTransformer
-from pytorch_forecasting.metrics import MAE, RMSE
-from pytorch_forecasting.models.temporal_fusion_transformer.sub_modules import (
-    InterpretableMultiHeadAttention,
-)
+from typing import List, Dict, Tuple, Optional
+from losses import QuantileLoss
 
 
-class MultiMix_TFT(TemporalFusionTransformer):
-    """
-    The MultiMix Temporal Fusion Transformer (MultiMix_TFT) is a class used for multi-task learning with
-    mixed frequency data. This class enhances the Temporal Fusion Transformer (TFT), a deep learning
-    model designed for interpretable time series prediction, to handle multiple targets at
-    different frequencies.
-
-    The class accepts multiple forecast targets and an aggregate mode to specify how the attention mechanism (part of the TFT)
-    works. It also contains a 'step' method for training and validation (in line with the original pytorch forecasting
-    package rather than pytorch lightning), which calculates the losses and
-    performs backpropagation.
-
-    Args:
-        mf_target (str, List[str]): Names of the target variables for the model.
-        mf_filler (int): Placeholder value for missing entries in the mixed frequency target variable.
-        agg_mode (str): Aggregation mode for the attention mechanism, can be one of ['mean', 'sum', 'concat'].
-        **kwargs: Additional arguments for the parent TemporalFusionTransformer class.
-    """
-
+class TemporalFusionTransformer(pl.LightningModule):
     def __init__(
         self,
-        mf_target: Union[str, List[str]],
-        mf_filler: int,
-        agg_mode: str,
-        **kwargs,
+        hidden_layer_size,
+        static_categorical_sizes: Dict[str, int],
+        historical_categorical_sizes: Dict[str, int],
+        static_reals: List[str],
+        historical_reals: List[str],
+        known_categoricals: List[str],
+        known_reals: List[str],
+        dropout_rate: float,
+        num_heads: int,
+        output_size: int,
+        quantiles: List[float] = None,
+        lr: float = 1e-3,
     ):
-        super().__init__(**kwargs)
+        super().__init__()
+        self.save_hyperparameters()
+        print("success")
 
-        self.agg_mode = agg_mode
-        self.multihead_attn = InterpretableMultiHeadAttentionFlex(
-            d_model=self.hparams.hidden_size,
-            n_head=self.hparams.attention_head_size,
-            dropout=self.hparams.dropout,
-            agg_mode=self.agg_mode,
+        # network parameters
+        self.hidden_layer_size = hidden_layer_size
+        self.static_categorical_sizes = static_categorical_sizes
+        self.historical_categorical_sizes = historical_categorical_sizes
+        self.static_reals = static_reals
+        self.historical_reals = historical_reals
+        self.known_categoricals = known_categoricals
+        self.known_reals = known_reals
+        self.dropout_rate = dropout_rate
+        self.num_heads = num_heads
+        self.output_size = output_size
+        self.quantiles = quantiles
+        self.loss = QuantileLoss(self.quantiles)
+        # self.loss = nn.L1Loss()
+        self.automatic_optimization = False
+        self.lr = lr
+
+        self.static_cat_length = (
+            len(self.static_categorical_sizes.keys())
+            if self.static_categorical_sizes
+            else 0
+        )
+        self.static_real_length = len(self.static_reals) if self.static_reals else 0
+        self.historical_cat_length = (
+            len(self.historical_categorical_sizes.keys())
+            if self.historical_categorical_sizes
+            else 0
+        )
+        self.historical_real_length = (
+            len(self.historical_reals) if self.historical_reals else 0
+        )
+        self.known_cat_length = (
+            len(self.known_categoricals) if self.known_categoricals else 0
+        )
+        self.known_real_length = len(self.known_reals) if self.known_reals else 0
+
+        # initialize network components
+        if self.static_categorical_sizes:
+            self.static_cat_embedding = nn.ModuleDict(
+                {
+                    var_name: nn.Embedding(cardinality, self.hidden_layer_size)
+                    for var_name, cardinality in self.static_categorical_sizes.items()
+                }
+            )
+        if self.static_reals:
+            self.static_real_embedding = nn.ModuleDict(
+                {
+                    var_name: nn.Linear(1, self.hidden_layer_size)
+                    for var_name in self.static_reals
+                }
+            )
+        if self.historical_categorical_sizes:
+            self.historical_cat_embedding = nn.ModuleDict(
+                {
+                    var_name: nn.Embedding(cardinality, self.hidden_layer_size)
+                    for var_name, cardinality in self.historical_categorical_sizes.items()
+                }
+            )
+        if self.historical_reals:
+            self.historical_real_embedding = nn.ModuleDict(
+                {
+                    var_name: nn.Linear(1, self.hidden_layer_size)
+                    for var_name in self.historical_reals
+                }
+            )
+        self.build_variable_selection_networks()
+        self.build_static_context_networks()
+        self.build_lstm()
+        self.build_post_lstm_gate_add_norm()
+        self.build_static_enrichment()
+        self.build_temporal_self_attention()
+        self.build_position_wise_feed_forward()
+        self.build_output_feed_forwards()
+        self.final0 = nn.Linear(self.hidden_layer_size, self.output_size)
+        self.final1 = nn.Linear(self.hidden_layer_size, self.output_size)
+        ## Initializing remaining weights
+        self.init_weights()
+
+    def forward(self, x):
+        static_embedded, historical_embedded, known_embedded = self.get_encoded_inputs(
+            x
+        )
+        if len(static_embedded.shape) == 2:
+            static_embedded = static_embedded.unsqueeze(1)
+        if len(known_embedded.shape) == 2:
+            known_embedded = known_embedded.unsqueeze(1)
+        static_encoder, _ = self.static_vsn(static_embedded)
+        static_context_variable_selection = self.static_context_variable_selection_grn(
+            static_encoder
+        )
+        static_context_enrichment = self.static_context_enrichment_grn(static_encoder)
+        static_context_state_h = self.static_context_state_h_grn(static_encoder)
+        static_context_state_c = self.static_context_state_c_grn(static_encoder)
+        historical_features, _ = self.temporal_historical_vsn(
+            (historical_embedded, static_context_variable_selection)
+        )
+        future_features, _ = self.temporal_future_vsn(
+            (known_embedded, static_context_variable_selection)
         )
 
-        self.mf_target = mf_target
-        self.mf_filler = mf_filler
-
-    def calculate_loss(self, task, prediction, target, target1_idx, mask, filler):
-        if task == self.target_names[1] and mask.sum() == 0:
-            return {
-                f"loss_{task}": torch.tensor(0.0),
-                f"mae_{task}": torch.tensor(0.0),
-                f"rmse_{task}": torch.tensor(0.0),
-            }
-
-        pred = (
-            prediction[target1_idx][mask]
-            if task == self.target_names[1]
-            else prediction[0]
-        )
-        target_subset = (
-            target[mask].unsqueeze(-1) if task == self.target_names[1] else target[0]
-        )
-        return {
-            f"loss_{task}": self.loss.metrics[target1_idx](pred, target_subset),
-            f"mae_{task}": MAE()(pred, target_subset),
-            f"rmse_{task}": RMSE()(pred, target_subset),
-        }
-
-    def correlation(self, x, y):
-        return torch.corrcoef(torch.stack((x, y)))[0][1]
-
-    def step(
-        self,
-        x: Dict[str, torch.Tensor],
-        y: Tuple[torch.Tensor, torch.Tensor],
-        batch_idx: int,
-        **kwargs,
-    ) -> Tuple[Dict[str, torch.Tensor], Dict[str, torch.Tensor]]:
-        # pad y sequence if different encoder lengths exist
-        if (x["decoder_lengths"] < x["decoder_lengths"].max()).any():
-            y = (
-                (
-                    [
-                        rnn.pack_padded_sequence(
-                            y_part,
-                            lengths=x["decoder_lengths"].cpu(),
-                            batch_first=True,
-                            enforce_sorted=False,
-                        )
-                        for y_part in y[0]
-                    ],
-                    y[1],
-                )
-                if isinstance(y[0], (list, tuple))
-                else (
-                    rnn.pack_padded_sequence(
-                        y[0],
-                        lengths=x["decoder_lengths"].cpu(),
-                        batch_first=True,
-                        enforce_sorted=False,
-                    ),
-                    y[1],
-                )
-            )
-
-        if self.training and len(self.hparams.monotone_constaints) > 0:
-            raise NotImplementedError(
-                "Monotonicity constraints are not (yet) implemented for the Multimix TFT"
-            )
-
-        out = self(x, **kwargs)
-        prediction = out["prediction"]
-
-        losses = {}
-
-        task0 = self.target_names[0]
-        losses.update(
-            self.calculate_loss(
-                task0, prediction, y[0], 0, y[0][0] != self.mf_filler, self.mf_filler
-            )
+        history_lstm, (state_h, state_c) = self.historical_lstm(
+            historical_features,
+            (static_context_state_h.unsqueeze(0), static_context_state_c.unsqueeze(0)),
         )
 
-        task1 = self.target_names[1]
-        target1_idx = self.target_names.index(self.mf_target)
-        mask = y[0][target1_idx] != self.mf_filler
-        losses.update(
-            self.calculate_loss(
-                task1, prediction, y[0], target1_idx, mask, self.mf_filler
-            )
+        future_lstm, _ = self.future_lstm(future_features, (state_h, state_c))
+        # Apply gated skip connection
+        input_embeddings = torch.cat((historical_features, future_features), axis=1)
+        lstm_layer = torch.cat((history_lstm, future_lstm), axis=1)
+        temporal_feature_layer = self.post_seq_encoder_gate_add_norm(
+            lstm_layer, input_embeddings
         )
+        # Static enrichment layers
+        expanded_static_context = static_context_enrichment.unsqueeze(1)
 
-        loss = (
-            self.loss.weights[0] * losses[f"loss_{task0}"]
-            + self.loss.weights[1] * losses[f"loss_{task1}"]
+        enriched = self.static_enrichment(
+            (temporal_feature_layer, expanded_static_context)
         )
-
-        n_samples = len(x["decoder_target"])
-
-        if self.current_stage == "val":
-            corr0 = self.correlation(prediction[0].squeeze(), y[0][0].squeeze())
-            corr1 = (
-                self.correlation(
-                    prediction[target1_idx][mask].squeeze(),
-                    y[0][target1_idx][mask].unsqueeze(-1).squeeze(),
-                )
-                if mask.sum() != 0
-                else torch.tensor(0.0)
-            )
-            total_corr = corr0 + corr1
-            tot_mae = losses[f"mae_{task0}"] + losses[f"mae_{task1}"]
-
-            self.log(
-                f"{self.current_stage}_corr0",
-                corr0,
-                on_epoch=True,
-                batch_size=n_samples,
-            )
-            self.log(
-                f"{self.current_stage}_corr1",
-                corr1,
-                on_epoch=True,
-                batch_size=n_samples,
-            )
-            self.log(
-                f"{self.current_stage}_corr_tot",
-                total_corr,
-                on_epoch=True,
-                batch_size=n_samples,
-            )
-            self.log(
-                f"{self.current_stage}_tot_mae",
-                tot_mae,
-                on_epoch=True,
-                batch_size=n_samples,
-            )
-
-        with torch.no_grad():
-            y[0][target1_idx] *= mask
-
-        self.log(
-            f"{self.current_stage}_loss",
-            loss,
-            on_step=self.training,
-            on_epoch=True,
-            prog_bar=True,
-            batch_size=n_samples,
+        # attention
+        x, self_att = self.self_attn_layer(
+            enriched, enriched, enriched, mask=self.get_decoder_mask(enriched)
         )
-        for i, j in losses.items():
-            self.log(
-                f"{self.current_stage}_{i}",
-                j,
-                on_step=self.training,
-                on_epoch=True,
-                batch_size=n_samples,
-            )
+        x = self.post_attn_gate_add_norm(x, enriched)
+        decoder = self.GRN_positionwise(x)
+        transformer_layer = self.post_tfd_gate_add_norm(decoder, temporal_feature_layer)
 
-        log = {"loss": loss, "n_samples": x["decoder_lengths"].size(0)}
-        return log, out
+        output0 = self.output_feed_forward0(transformer_layer[Ellipsis, 120:, :])
+        output1 = self.output_feed_forward1(transformer_layer[Ellipsis, 120:, :])
+        output0 = self.final0(output0)
+        output1 = self.final1(output1)
+        return output0, output1
 
+    def training_step(self, batch, batch_idx):
+        x, y = batch
+        optimizer = self.optimizers()
+        y0_hat, y1_hat = self(x)
+        y0_hat, y1_hat = y0_hat.squeeze(), y1_hat.squeeze()
+        y0, y1 = y[:, 0].squeeze(), y[:, 1].squeeze()
 
-class InterpretableMultiHeadAttentionFlex(InterpretableMultiHeadAttention):
-    """
-    The InterpretableMultiHeadAttentionFlex is an extension of the InterpretableMultiHeadAttention class,
-    which is a core component of the Temporal Fusion Transformer.
+        # Loss for the first task
+        optimizer.zero_grad()
+        loss0 = self.loss(y0_hat, y0)
+        # self.manual_backward(loss0, retain_graph=True)  # Compute gradients for task 1
 
-    This class includes a flexible aggregation mode ('mean', 'sum', or 'concat'), allowing to control
-    how information is aggregated across multiple attention heads.
+        # Check for availability of the second target in the batch
+        available_mask = ~torch.isnan(y1)  # Create a mask for available targets
 
-    The forward method of this class applies attention to the inputs and returns the aggregated result.
+        if available_mask.any():  # If there's at least one available target
+            y1 = y1[available_mask]  # Filter using the mask
+            y1_hat = y1_hat[available_mask]  # Filter the predictions as well
 
-    Args:
-        agg_mode (str): The aggregation mode for attention mechanism, can be one of ['mean', 'sum', 'concat'].
-        **kwargs: Additional arguments for the parent InterpretableMultiHeadAttention class.
-    """
-
-    def __init__(self, agg_mode: str = "mean", **kwargs):
-        self.agg_mode = agg_mode
-        super().__init__(**kwargs)
-
-        assert self.agg_mode in [
-            "mean",
-            "sum",
-            "concat",
-        ], 'agg_mode not recognized. Should be one of ["mean", "sum", "concat"]'
-        if self.agg_mode == "concat":
-            # if concatenation, change input dim
-            self.w_h = nn.Linear(self.n_head * self.d_v, self.d_model, bias=False)
+            loss1 = self.loss(y1_hat, y1)  # Compute loss only for available targets
+            # self.manual_backward(
+            #    loss1, retain_graph=True
+            # )  # Compute gradients for task 2
         else:
-            # else, apply normal strategy
-            self.w_h = nn.Linear(self.d_v, self.d_model, bias=False)
+            loss1 = torch.tensor(0.0).to(self.device)
 
-    def forward(self, q, k, v, mask=None) -> Tuple[torch.Tensor, torch.Tensor]:
-        heads = []
-        attns = []
-        vs = self.v_layer(v)
-        for i in range(self.n_head):
-            qs = self.q_layers[i](q)
-            ks = self.k_layers[i](k)
-            head, attn = self.attention(qs, ks, vs, mask)
-            head_dropout = self.dropout(head)
-            heads.append(head_dropout)
-            attns.append(attn)
+        self.manual_backward(loss0 + loss1)  # Compute gradients for both tasks
+        optimizer.step()
+        with torch.no_grad():
+            total_loss = loss0 + loss1
+            # get middle idx of quantiles
+            if self.quantiles is not None:
+                middle_idx = len(self.quantiles) // 2
+                mse_loss1 = nn.MSELoss()(y1_hat[:, middle_idx], y1)
+            else:
+                mse_loss1 = nn.MSELoss()(y1_hat, y1)
+            self.log("train_loss", total_loss, prog_bar=True)
+            self.log("train_loss0", loss0, prog_bar=True)
+            self.log("train_loss1", loss1, prog_bar=True)
+            self.log("train_mse_loss1", mse_loss1, prog_bar=True)
 
-        head = torch.stack(heads, dim=2) if self.n_head > 1 else heads[0]
-        attn = torch.stack(attns, dim=2)
+        return total_loss
 
-        if self.agg_mode == "mean":
-            outputs = torch.mean(head, dim=2) if self.n_head > 1 else head
-        elif self.agg_mode == "sum":
-            outputs = torch.sum(head, dim=2) if self.n_head > 1 else head
-        elif self.agg_mode == "concat":
-            outputs = torch.cat(heads, dim=2)
+    def validation_step(self, batch, batch_idx):
+        x, y = batch
+        y0_hat, y1_hat = self(x)
+        y0, y1 = y[:, 0].squeeze(), y[:, 1].squeeze()
+        y0_hat, y1_hat = y0_hat.squeeze(), y1_hat.squeeze()
+        loss0 = self.loss(y0_hat, y0)
+        available_mask = ~torch.isnan(y1)
+        if available_mask.any():
+            y1 = y1[available_mask]
+            y1_hat = y1_hat[available_mask]
+            loss1 = self.loss(y1_hat, y1)
+        else:
+            loss1 = torch.tensor(0.0).to(self.device)
+        loss = loss0 + loss1
+        if self.quantiles is not None:
+            middle_idx = len(self.quantiles) // 2
+            mse_loss1 = nn.MSELoss()(y1_hat[:, middle_idx], y1)
+        else:
+            mse_loss1 = nn.MSELoss()(y1_hat, y1)
+        self.log("val_loss", loss, prog_bar=True)
+        self.log("val_loss0", loss0, prog_bar=True)
+        self.log("val_loss1", loss1, prog_bar=True)
+        self.log("val_mse_loss1", mse_loss1, prog_bar=True)
+        return loss
 
-        outputs = self.w_h(outputs)
-        outputs = self.dropout(outputs)
+    def configure_optimizers(self):
+        return torch.optim.Adam(self.parameters(), lr=self.lr)
 
-        return outputs, attn
+    def init_weights(self):
+        for name, p in self.named_parameters():
+            if ("lstm" in name and "ih" in name) and "bias" not in name:
+                torch.nn.init.xavier_uniform_(p)
+            elif ("lstm" in name and "hh" in name) and "bias" not in name:
+                torch.nn.init.orthogonal_(p)
+            elif "lstm" in name and "bias" in name:
+                torch.nn.init.zeros_(p)
+
+    def get_encoded_inputs(self, x):
+        static_real_input = x.get("static_real", None)
+        static_cat_input = x.get("static_cat", None)
+        historical_cat_input = x.get("historical_cat", None)
+        historical_real_input = x.get("historical_real", None)
+        known_cat_input = x.get("known_cat", None)
+        known_real_input = x.get("known_real", None)
+
+        # embed static categorical variables
+        static_embedded = []
+        if static_cat_input is not None:
+            static_embedded += [
+                self.static_cat_embedding[key](static_cat_input[key][:, 0])
+                for key in self.static_cat_embedding.keys()
+            ]
+        # embed static real variables
+        if static_real_input is not None:
+            static_embedded += [
+                self.static_real_embedding[key](static_real_input[key][:, 0])
+                for key in self.static_real_embedding.keys()
+            ]
+
+        # concat embedded static and real variables if both are present
+        if static_embedded != []:
+            static_embedded = torch.cat(static_embedded, dim=1)
+
+        # embed historical cat variables
+        historical_embedded = []
+        if historical_cat_input is not None:
+            historical_embedded += [
+                self.historical_cat_embedding[key](historical_cat_input[key])
+                for key in self.historical_cat_embedding.keys()
+            ]
+        # embed historical real variables
+        if historical_real_input is not None:
+            historical_embedded += [
+                self.historical_real_embedding[key](
+                    historical_real_input[key].unsqueeze(2)
+                )
+                for key in self.historical_real_embedding.keys()
+            ]
+
+        # concat embedded historical cat and real variables if both are present
+        if historical_embedded != []:
+            historical_embedded = torch.cat(historical_embedded, dim=2)
+
+        # embed known cat variables
+        known_embedded = []
+        if known_cat_input is not None:
+            assert all(
+                [
+                    key in self.historical_cat_embedding.keys()
+                    for key in known_cat_input.keys()
+                ]
+            ), "known_cat_input contains keys not in historical_cat_embedding"
+            known_embedded += [
+                self.historical_cat_embedding[key](known_cat_input[key])
+                for key in known_cat_input.keys()
+            ]
+        # embed known real variables
+        if known_real_input is not None:
+            assert all(
+                [
+                    key in self.historical_real_embedding.keys()
+                    for key in known_real_input.keys()
+                ]
+            ), "known_real_input contains keys not in historical_real_embedding"
+            known_embedded += [
+                self.historical_real_embedding[key](known_real_input[key].unsqueeze(1))
+                for key in known_real_input.keys()
+            ]
+
+        # concat embedded known cat and real variables if both are present
+        if known_embedded != []:
+            known_embedded = torch.cat(known_embedded, dim=1)
+
+        return static_embedded, historical_embedded, known_embedded
+
+    def get_decoder_mask(self, self_attn_inputs):
+        """Returns causal mask to apply for self-attention layer.
+        Args:
+        self_attn_inputs: Inputs to self attention layer to determine mask shape
+        """
+        len_s = self_attn_inputs.shape[1]
+        bs = self_attn_inputs.shape[0]
+        mask = torch.cumsum(torch.eye(len_s), 0)
+        mask = mask.repeat(bs, 1, 1).to(torch.float32)
+
+        return mask.to(self.device)
+
+    def build_variable_selection_networks(self):
+        self.static_vsn = VariableSelectionNetwork(
+            hidden_layer_size=self.hidden_layer_size,
+            input_size=self.hidden_layer_size
+            * (self.static_cat_length + self.static_real_length),
+            output_size=self.static_cat_length + self.static_real_length,
+            dropout_rate=self.dropout_rate,
+        )
+
+        self.temporal_historical_vsn = VariableSelectionNetwork(
+            hidden_layer_size=self.hidden_layer_size,
+            input_size=self.hidden_layer_size
+            * (self.historical_cat_length + self.historical_real_length),
+            output_size=self.historical_cat_length + self.historical_real_length,
+            dropout_rate=self.dropout_rate,
+            additional_context=self.hidden_layer_size,
+        )
+
+        self.temporal_future_vsn = VariableSelectionNetwork(
+            hidden_layer_size=self.hidden_layer_size,
+            input_size=self.hidden_layer_size
+            * (self.known_cat_length + self.known_real_length),
+            output_size=self.known_cat_length + self.known_real_length,
+            dropout_rate=self.dropout_rate,
+            additional_context=self.hidden_layer_size,
+        )
+
+    def build_static_context_networks(self):
+        self.static_context_variable_selection_grn = GatedResidualNetwork(
+            self.hidden_layer_size, dropout_rate=self.dropout_rate
+        )
+
+        self.static_context_enrichment_grn = GatedResidualNetwork(
+            self.hidden_layer_size, dropout_rate=self.dropout_rate
+        )
+
+        self.static_context_state_h_grn = GatedResidualNetwork(
+            self.hidden_layer_size, dropout_rate=self.dropout_rate
+        )
+
+        self.static_context_state_c_grn = GatedResidualNetwork(
+            self.hidden_layer_size, dropout_rate=self.dropout_rate
+        )
+
+    def build_lstm(self):
+        self.historical_lstm = nn.LSTM(
+            input_size=self.hidden_layer_size,
+            hidden_size=self.hidden_layer_size,
+            batch_first=True,
+        )
+        self.future_lstm = nn.LSTM(
+            input_size=self.hidden_layer_size,
+            hidden_size=self.hidden_layer_size,
+            batch_first=True,
+        )
+
+    def build_post_lstm_gate_add_norm(self):
+        self.post_seq_encoder_gate_add_norm = GateAddNormNetwork(
+            self.hidden_layer_size,
+            self.hidden_layer_size,
+            self.dropout_rate,
+            activation=None,
+        )
+
+    def build_static_enrichment(self):
+        self.static_enrichment = GatedResidualNetwork(
+            self.hidden_layer_size,
+            dropout_rate=self.dropout_rate,
+            additional_context=self.hidden_layer_size,
+        )
+
+    def build_temporal_self_attention(self):
+        self.self_attn_layer = InterpretableMultiHeadAttention(
+            n_head=self.num_heads,
+            d_model=self.hidden_layer_size,
+            dropout=self.dropout_rate,
+        )
+
+        self.post_attn_gate_add_norm = GateAddNormNetwork(
+            self.hidden_layer_size,
+            self.hidden_layer_size,
+            self.dropout_rate,
+            activation=None,
+        )
+
+    def build_position_wise_feed_forward(self):
+        self.GRN_positionwise = GatedResidualNetwork(
+            self.hidden_layer_size, dropout_rate=self.dropout_rate
+        )
+
+        self.post_tfd_gate_add_norm = GateAddNormNetwork(
+            self.hidden_layer_size,
+            self.hidden_layer_size,
+            self.dropout_rate,
+            activation=None,
+        )
+
+    def build_output_feed_forwards(self):
+        self.output_feed_forward0 = torch.nn.Linear(
+            self.hidden_layer_size, self.hidden_layer_size
+        )
+        self.output_feed_forward1 = torch.nn.Linear(
+            self.hidden_layer_size, self.hidden_layer_size
+        )
