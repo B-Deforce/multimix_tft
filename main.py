@@ -15,6 +15,15 @@ def main(args):
     with open(args.config_path) as cfg:
         config = yaml.safe_load(cfg)
 
+    q = input(
+        f"Time gap is set to {config['model_params']['time_gap']}."
+        + f"\nand historical variables are set to {config['model_params']['historical_real_cols']}."
+        + "\nDo you want to continue? (y/n): "
+    )
+    if q.lower() != "y":
+        print("Exiting...")
+        exit()
+
     m_config = config["model_params"]
     t_params = config["train_params"]
     # load data
@@ -65,15 +74,18 @@ def main(args):
         quantiles=m_config["quantiles"],
     )
     trainer = pl.Trainer(max_epochs=t_params["epochs"])
-    print("stopped before fit")
-    exit()
     trainer.fit(model, train_dataloader, val_dataloader, ckpt_path=args.ckpt_path)
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train MultiMix.")
     parser.add_argument("--config_path", type=str)
-    parser.add_argument("--ckpt_path", type=str, default=None)
+    parser.add_argument(
+        "--ckpt_path",
+        type=str,
+        default=None,
+        help="Checkpoint path to resume training, if any.",
+    )
 
     args = parser.parse_args()
     main(args)

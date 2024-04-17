@@ -5,7 +5,6 @@ from tft.base_components import GatedResidualNetwork
 from tft.base_components import ScaledDotProductAttention
 from tft.base_components import InterpretableMultiHeadAttention
 from tft.base_components import VariableSelectionNetwork
-import json
 import torch
 from torch import nn
 from typing import List, Dict, Tuple, Optional
@@ -30,7 +29,6 @@ class TemporalFusionTransformer(pl.LightningModule):
     ):
         super().__init__()
         self.save_hyperparameters()
-        print("success")
 
         # network parameters
         self.hidden_layer_size = hidden_layer_size
