@@ -117,7 +117,9 @@ class TFTDataset(Dataset):
         sample["time_idx"] = idx
         sample["group_ids"] = self.group_ids[idx]
         target = self.target[next_idx]
-        assert idx[-1] == next_idx - self.time_gap, "Time gap is not correct!"
+        assert (
+            idx[-1] == next_idx - self.time_gap
+        ), "Time gap is not correct! Are you sure the index of your dataset starts from 0 and is continuous?"
         return sample, target
 
     def _get_static_real_sample(self, idx):
@@ -254,12 +256,16 @@ class TimeSeriesDataLoader(pl.LightningDataModule):
 
     def val_dataloader(self):
         return DataLoader(
-            self.val_dataset, batch_size=self.batch_size * 10, shuffle=False
+            self.val_dataset,
+            batch_size=self.batch_size * 4,
+            shuffle=False,
         )
 
     def test_dataloader(self):
         return DataLoader(
-            self.test_dataset, batch_size=self.batch_size * 10, shuffle=False
+            self.test_dataset,
+            batch_size=self.batch_size * 4,
+            shuffle=False,
         )
 
     def get_cat_mappings(self, cat_cols):

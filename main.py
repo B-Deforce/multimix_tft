@@ -8,6 +8,36 @@ import argparse
 import yaml
 
 
+def create_ckpt_name_and_logger(config):
+    # Extract columns, omitting prefix and filtering
+    cols = ""
+    cols = cols.join(
+        i.replace("vmc_", "")
+        for i in config["model_params"]["historical_real_cols"]
+        if "vmc" in i
+    )
+    target = config["model_params"]["target_col"][0].replace("vmc_", "")
+    # Calculate time gap
+    time_gap = config["model_params"]["time_gap"] * 4
+    ckpt_name = f"MultiMix_{cols}_{target}_{time_gap}"
+
+    # create ckpt logger
+    tb_logger = pl.loggers.TensorBoardLogger(
+        save_dir="lightning_logs",  # Base directory for logs
+        name=ckpt_name,  # Top-level directory name
+        version=None,  # Auto-incrementing version number
+    )
+
+    # create csv logger
+    csv_logger = pl.loggers.CSVLogger(
+        save_dir="lightning_logs",
+        name=ckpt_name,
+        version=tb_logger.version,  # Use the same version directory as the TensorBoard logger
+    )
+    loggers = [tb_logger, csv_logger]
+    return ckpt_name, loggers
+
+
 def main(args):
     # set global seed
     pl.seed_everything(96)
@@ -15,14 +45,15 @@ def main(args):
     with open(args.config_path) as cfg:
         config = yaml.safe_load(cfg)
 
-    q = input(
-        f"Time gap is set to {config['model_params']['time_gap']}."
-        + f"\nand historical variables are set to {config['model_params']['historical_real_cols']}."
-        + "\nDo you want to continue? (y/n): "
-    )
-    if q.lower() != "y":
-        print("Exiting...")
-        exit()
+    # q = input(
+    # f"Time gap is set to {config['model_params']['time_gap']} unit."
+    # + f"\nTarget is set to {config['model_params']['target_col']}."
+    # + f"\nand historical variables are set to {config['model_params']['historical_real_cols']}."
+    # + "\nDo you want to continue? (y/n): "
+    # )
+    # if q.lower() != "y":
+    # print("Exiting...")
+    # exit()
 
     m_config = config["model_params"]
     t_params = config["train_params"]
@@ -73,8 +104,24 @@ def main(args):
         output_size=m_config["output_size"],
         quantiles=m_config["quantiles"],
     )
-    trainer = pl.Trainer(max_epochs=t_params["epochs"])
-    trainer.fit(model, train_dataloader, val_dataloader, ckpt_path=args.ckpt_path)
+
+    # name custom checkpoint
+    model_name, loggers = create_ckpt_name_and_logger(config)
+    checkpoint_callback = pl.callbacks.ModelCheckpoint(
+        monitor="val_mse_loss1",
+        filename=model_name + "-{epoch:02d}-{val_mse_loss1:.2f}",
+        save_top_k=1,
+        save_last=True,
+        mode="min",
+    )
+    # init trainer
+    trainer = pl.Trainer(
+        logger=loggers,
+        max_epochs=config["train_params"]["epochs"],
+        callbacks=[checkpoint_callback],
+    )
+    # fit trainer
+    trainer.fit(model, train_dataloader, val_dataloader)
 
 
 if __name__ == "__main__":

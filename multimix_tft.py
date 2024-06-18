@@ -216,14 +216,15 @@ class TemporalFusionTransformer(pl.LightningModule):
             y1 = y1[available_mask]
             y1_hat = y1_hat[available_mask]
             loss1 = self.loss(y1_hat, y1)
+            if self.quantiles is not None:
+                middle_idx = len(self.quantiles) // 2
+                mse_loss1 = nn.MSELoss()(y1_hat[:, middle_idx], y1)
+            else:
+                mse_loss1 = nn.MSELoss()(y1_hat, y1)
         else:
             loss1 = torch.tensor(0.0).to(self.device)
+            mse_loss1 = torch.tensor(0.0).to(self.device)
         loss = loss0 + loss1
-        if self.quantiles is not None:
-            middle_idx = len(self.quantiles) // 2
-            mse_loss1 = nn.MSELoss()(y1_hat[:, middle_idx], y1)
-        else:
-            mse_loss1 = nn.MSELoss()(y1_hat, y1)
         self.log("val_loss", loss, prog_bar=True)
         self.log("val_loss0", loss0, prog_bar=True)
         self.log("val_loss1", loss1, prog_bar=True)
