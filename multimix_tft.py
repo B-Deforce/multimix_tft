@@ -24,6 +24,7 @@ class TemporalFusionTransformer(pl.LightningModule):
         dropout_rate: float,
         num_heads: int,
         output_size: int,
+        window_size: int,
         quantiles: List[float] = None,
         lr: float = 1e-3,
     ):
@@ -41,6 +42,7 @@ class TemporalFusionTransformer(pl.LightningModule):
         self.dropout_rate = dropout_rate
         self.num_heads = num_heads
         self.output_size = output_size
+        self.window_size = window_size
         self.quantiles = quantiles
         self.loss = QuantileLoss(self.quantiles)
         # self.loss = nn.L1Loss()
@@ -155,9 +157,12 @@ class TemporalFusionTransformer(pl.LightningModule):
         x = self.post_attn_gate_add_norm(x, enriched)
         decoder = self.GRN_positionwise(x)
         transformer_layer = self.post_tfd_gate_add_norm(decoder, temporal_feature_layer)
-
-        output0 = self.output_feed_forward0(transformer_layer[Ellipsis, 120:, :])
-        output1 = self.output_feed_forward1(transformer_layer[Ellipsis, 120:, :])
+        output0 = self.output_feed_forward0(
+            transformer_layer[Ellipsis, self.window_size :, :]
+        )
+        output1 = self.output_feed_forward1(
+            transformer_layer[Ellipsis, self.window_size :, :]
+        )
         output0 = self.final0(output0)
         output1 = self.final1(output1)
         return output0, output1

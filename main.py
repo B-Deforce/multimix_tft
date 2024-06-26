@@ -103,6 +103,7 @@ def main(args):
         num_heads=m_config["num_heads"],
         output_size=m_config["output_size"],
         quantiles=m_config["quantiles"],
+        window_size=data_module.window_size,
     )
 
     # name custom checkpoint
