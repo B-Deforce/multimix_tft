@@ -1,10 +1,8 @@
 import pytorch_lightning as pl
-from base_components import GatedLinearUnit
-from base_components import GateAddNormNetwork
-from base_components import GatedResidualNetwork
-from base_components import ScaledDotProductAttention
-from base_components import InterpretableMultiHeadAttention
-from base_components import VariableSelectionNetwork
+from tft.base_components import GateAddNormNetwork
+from tft.base_components import GatedResidualNetwork
+from tft.base_components import InterpretableMultiHeadAttention
+from tft.base_components import VariableSelectionNetwork
 import json
 import torch
 from torch import nn
@@ -24,6 +22,7 @@ class TemporalFusionTransformer(pl.LightningModule):
         dropout_rate: float,
         num_heads: int,
         output_size: int,
+        lr: float = 1e-3,
     ):
         super().__init__()
         self.save_hyperparameters()
@@ -39,6 +38,7 @@ class TemporalFusionTransformer(pl.LightningModule):
         self.dropout_rate = dropout_rate
         self.num_heads = num_heads
         self.output_size = output_size
+        self.lr = lr
         self.loss = nn.L1Loss()
 
         self.static_cat_length = (
@@ -169,7 +169,7 @@ class TemporalFusionTransformer(pl.LightningModule):
         return loss
 
     def configure_optimizers(self):
-        return torch.optim.Adam(self.parameters())
+        return torch.optim.Adam(self.parameters(), lr=self.lr)
 
     def init_weights(self):
         for name, p in self.named_parameters():
@@ -371,3 +371,29 @@ class TemporalFusionTransformer(pl.LightningModule):
         self.output_feed_forward = torch.nn.Linear(
             self.hidden_layer_size, self.output_size
         )
+
+    def get_ordered_feature_names(self):
+        static_cat_names = (
+            list(self.static_categorical_sizes.keys())
+            if self.static_categorical_sizes
+            else []
+        )
+        static_real_names = list(self.static_reals) if self.static_reals else []
+        historical_cat_names = (
+            list(self.historical_categorical_sizes.keys())
+            if self.historical_categorical_sizes
+            else []
+        )
+        historical_real_names = (
+            list(self.historical_reals) if self.historical_reals else []
+        )
+        known_cat_names = (
+            list(self.known_categoricals) if self.known_categoricals else []
+        )
+        known_real_names = list(self.known_reals) if self.known_reals else []
+
+        return {
+            "static": static_cat_names + static_real_names,
+            "historical": historical_cat_names + historical_real_names,
+            "known": known_cat_names + known_real_names,
+        }
