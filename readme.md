@@ -11,6 +11,14 @@ This repository contains the implementation of `MultiMix` as described in [Multi
 
 [1] Lim, B., Arık, S. Ö., Loeff, N., & Pfister, T. (2021). Temporal fusion transformers for interpretable multi-horizon time series forecasting. International Journal of Forecasting, 37(4), 1748-1764.
 
+
+#### MultiMix requires two main components:
+1. **DataLoader**: A custom data loader that prepares the mixed-frequency data for training, validation, and testing. It handles different frequencies of data and ensures that the model receives the correct input format.
+2. **Model**: The `MultiMixTFT` class, which extends the Temporal Fusion Transformer to support multi-task learning with mixed-frequency data. It includes methods for training, validation, and inference.
+
+The DataLoader is designed to work with the `pytorch_lightning` framework, which simplifies the training process and allows for easy integration with various backends.
+The model is implemented using `pytorch_lightning` as well, which provides a high-level interface for training and evaluating deep learning models.
+
 ## Baselines
 
 `Baselines` contains an implementation of `MultiMix` with Long Short-Term Memory (LSTM) model extended for multi-task learning scenarios with mixed-frequency data.
