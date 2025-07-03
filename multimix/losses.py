@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import pytorch_lightning as pl
 
 
 class QuantileLoss(nn.Module):
@@ -40,3 +41,19 @@ class QuantileLoss(nn.Module):
             )
 
         return 2 * losses.mean()
+
+
+class CustomLoss(pl.LightningModule):
+    def __init__(self, l_limit, u_limit, penalty):
+        super().__init__()
+        print("Using custom loss function")
+        self.l_limit = l_limit
+        self.u_limit = u_limit
+        self.penalty = penalty
+
+    def forward(self, y_pred, y_true):
+        y_pred = y_pred[:, 1]
+        error = y_true - y_pred
+        condition = torch.logical_and(y_true <= self.u_limit, y_true >= self.l_limit)
+        heavy_penalty = torch.where(condition, error**2 * self.penalty, error**2)
+        return torch.mean(heavy_penalty)
