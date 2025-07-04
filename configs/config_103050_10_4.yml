@@ -1,0 +1,39 @@
+
+train_path: "../IVIA_oranges/data_store/processed/train_df_4h_minmax.parquet"
+val_path: "../IVIA_oranges/data_store/processed/val_df_4h_minmax.parquet"
+test_path: "../IVIA_oranges/data_store/processed/test_df_4h_minmax.parquet"
+scaling_path: "../IVIA_oranges/data_store/processed/scaling_params_minmax.json"
+model_params:
+  window_size: 120
+  batch_size: 32
+  static_real_cols: null
+  static_cat_cols: ["treatment", "field_id"]
+  historical_real_cols: [
+    'vmc_10', 
+    'vmc_30',
+    'vmc_50',
+    #'vmc_70', 
+    'avg_temp', 
+    'wind_speed', 
+    'wind_dir', 
+    'radiation', 
+    'precipitation', 
+    'dew_point_kpa', 
+    'irr_mm'
+    ]
+  historical_cat_cols: ["month", "hour"]
+  known_cat_cols: ["month", "hour"]
+  known_real_cols: ["precipitation", "avg_temp"]
+  primary_target_col: "vmc_10"
+  mf_target_col: "avg_swp"
+  group_col: "composite_group_id"
+  time_col: "time_idx"
+  mixed_only: false
+  time_gap: 1 # per multiple of 4 hours
+  dropout_rate: 0.1
+  num_heads: 2
+  hidden_layer_size: 16
+  output_size: 3
+  quantiles: [0.05, 0.5, 0.95]
+train_params:
+  epochs: 200
