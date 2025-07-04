@@ -29,7 +29,6 @@ model_params:
   mf_target_col: "binary_swp"
   group_col: "composite_group_id"
   time_col: "time_idx"
-  mixed_only: false
   time_gap: 1 # per multiple of 4 hours
   dropout_rate: 0.1
   num_heads: 2
