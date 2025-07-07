@@ -19,6 +19,22 @@ This repository contains the implementation of `MultiMix` as described in [Multi
 The DataLoader is designed to work with the `pytorch_lightning` framework, which simplifies the training process and allows for easy integration with various backends.
 The model is implemented using `pytorch_lightning` as well, which provides a high-level interface for training and evaluating deep learning models.
 
+## Running the Code
+One can install the required dependencies using the provided `environment.yml` file, assuming you have `conda` installed. You can create a new conda environment with the following command:
+
+```bash
+conda env create -f environment.yml
+conda activate multimix
+```
+
+The project uses shell scripts for training and evaluating the model. You can find these scripts in the `scripts` directory. The main script to run is `train_multimix.sh`, which can be executed as follows:
+
+```bash
+bash scripts/train_multimix.sh
+```
+
+This script calls the `main.py` file and passes the necessary arguments for training the `MultiMix` model. You can modify the script to change config file path and other parameters as needed (see `main.py` for available arguments).
+
 ## Baselines
 
 `Baselines` contains an implementation of `MultiMix` with Long Short-Term Memory (LSTM) model extended for multi-task learning scenarios with mixed-frequency data.
