@@ -338,12 +338,10 @@ class TimeSeriesDataLoader(pl.LightningDataModule):
         cat_mapper = {}
         for col in cat_cols:
             self.train[col], cat_mapper[col] = self._map_colname(self.train, col)
-            self.val[col].replace(
-                {v: k for k, v in cat_mapper[col].items()}, inplace=True
-            )
-            self.test[col].replace(
-                {v: k for k, v in cat_mapper[col].items()}, inplace=True
-            )
+            mapper = {v: k for k, v in cat_mapper[col].items()}
+            self.val[col] = self.val[col].map(mapper)
+            if self.test is not None:
+                self.test[col] = self.test[col].map(mapper)
         return cat_mapper
 
     def get_cat_sizes(self, cat_mapper: dict[str, list[str]]) -> dict[str, int]:
