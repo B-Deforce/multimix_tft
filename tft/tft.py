@@ -1,15 +1,33 @@
+from typing import Dict, List
+
 import pytorch_lightning as pl
-from tft.base_components import GateAddNormNetwork
-from tft.base_components import GatedResidualNetwork
-from tft.base_components import InterpretableMultiHeadAttention
-from tft.base_components import VariableSelectionNetwork
-import json
 import torch
 from torch import nn
-from typing import List, Dict, Tuple, Optional
+
+from tft.base_components import (
+    GateAddNormNetwork,
+    GatedResidualNetwork,
+    InterpretableMultiHeadAttention,
+    VariableSelectionNetwork,
+)
 
 
 class TemporalFusionTransformer(pl.LightningModule):
+    """Temporal Fusion Transformer for time series forecasting.
+    Args:
+        hidden_layer_size (int): Size of the hidden layers in the network.
+        static_categorical_sizes (Dict[str, int]): Dictionary mapping static categorical variable names to their cardinalities.
+        historical_categorical_sizes (Dict[str, int]): Dictionary mapping historical categorical variable names to their cardinalities.
+        static_reals (List[str]): List of static real variable names.
+        historical_reals (List[str]): List of historical real variable names.
+        known_categoricals (List[str]): List of known categorical variable names.
+        known_reals (List[str]): List of known real variable names.
+        dropout_rate (float): Dropout rate for regularization.
+        num_heads (int): Number of attention heads in the multi-head attention layer.
+        output_size (int): Size of the output layer.
+        lr (float, optional): Learning rate for the optimizer. Defaults to 1e-3.
+    """
+
     def __init__(
         self,
         hidden_layer_size,
