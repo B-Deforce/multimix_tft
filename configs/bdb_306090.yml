@@ -1,0 +1,43 @@
+
+train_path:   "../multifruit-data/data/processed/bdb/train.parquet"
+val_path:     "../multifruit-data/data/processed/bdb/val.parquet"
+test_path:    "../multifruit-data/data/processed/bdb/test.parquet"
+scaling_path: "../multifruit-data/data/interim/bdb/scaling_params.json"
+model_params:
+  window_size: 7
+  batch_size: 64
+  static_real_cols: null
+  static_cat_cols: [
+    "irrigation_treatment", 
+    "pruning_treatment", 
+    "orchard_id"
+    ]
+  historical_real_cols: [
+    'avg_moist_30', 
+    'avg_moist_60', 
+    'avg_moist_90', 
+    'avg_soil_temp_30', 
+    'ETo',
+    'precip_daily',
+    'irrigation_amount'
+    ]
+  historical_cat_cols: [
+    "avg_moist_30_missing",
+    "avg_moist_60_missing",
+    "avg_moist_90_missing",
+    "month"
+    ]
+  known_cat_cols: ["month"]
+  known_real_cols: ["precip_daily", "ETo"]
+  primary_target_col: "avg_moist_30"
+  mf_target_col: "swp_mpa"
+  group_col: "composite_group_id"
+  time_col: "time_idx"
+  time_gap: 1 # per multiple of 1 day
+  dropout_rate: 0.4
+  num_heads: 3
+  hidden_layer_size: 16
+  output_size: 3
+  quantiles: [0.05, 0.5, 0.95]
+train_params:
+  epochs: 200
