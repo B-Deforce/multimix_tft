@@ -30,14 +30,20 @@ conda activate multimix
 The project uses shell scripts for training and evaluating the model. You can find these scripts in the `scripts` directory. The main script to run is `train_multimix.sh`, which can be executed as follows:
 
 ```bash
-bash scripts/train_multimix.sh
+sh scripts/train_multimix.sh
 ```
 
 This script calls the `main.py` file and passes the necessary arguments for training the `MultiMix` model. You can modify the script to change config file path and other parameters as needed (see `main.py` for available arguments).
 
+To evaluate a trained model (stored as checkpoint), one can run:
+```bash
+sh scripts/test_multimix.sh
+```
+
 ## Baselines
 
 `Baselines` contains an implementation of `MultiMix` with Long Short-Term Memory (LSTM) model extended for multi-task learning scenarios with mixed-frequency data.
+Note that this implementation is not up-to-date.
 
 ## Data Sources
 
