@@ -1,3 +1,9 @@
+# Custom
+lightning_logs/
+*.ckpt
+results/
+
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
