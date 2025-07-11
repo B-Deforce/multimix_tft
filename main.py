@@ -75,13 +75,13 @@ def main(args):
         )
 
     # Initialize model
-    if args.finetune == "partial":
+    if args.task == "regression_transfer_partial_ft":
         model = MultiMixTFTT(
             pretrained_model_path=m_config["pretrained_model_path"],
             output_size=m_config["output_size"],
             quantiles=m_config["quantiles"],
         )
-    elif args.finetune == "full":
+    elif args.task == "regression_transfer_full_ft":
         model = MultiMixTFT.load_from_checkpoint(
             checkpoint_path=m_config["pretrained_model_path"],
         )
@@ -154,14 +154,13 @@ if __name__ == "__main__":
         help="Checkpoint name to save the model.",
     )
     parser.add_argument(
-        "--finetune",
-        choices=["full", "partial"],
-        default=None,
-        help="Finetune the model.",
-    )
-    parser.add_argument(
         "--task",
-        choices=["regression", "classification"],
+        choices=[
+            "regression", # Standard regression task
+            "classification", # Classification task
+            "regression_transfer_partial_ft", # Transfer learning with partial fine-tuning
+            "regression_transfer_full_ft", # Transfer learning with full fine-tuning
+        ],
         default="regression",
         help="Task type.",
     )
