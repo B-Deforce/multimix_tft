@@ -20,5 +20,6 @@ class MultiMixTFTT(MultiMixTFT):
         self.pretrained_tft.freeze()
         self.automatic_optimization = False
 
+        self.build_output_feed_forwards()
         ## Initializing remaining weights
         self.init_weights()
