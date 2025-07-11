@@ -127,7 +127,7 @@ if __name__ == "__main__":
         "--return_x",
         type=bool,
         default=False,
-        help="Return x values",
+        help="Return key input values: treatment indicator, field id, and crop-type",
     )
     args = parser.parse_args()
     main(args)
